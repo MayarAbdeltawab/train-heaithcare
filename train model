@@ -1,0 +1,119 @@
+import pandas as pd
+import numpy as np
+import random
+import nltk
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+import tensorflow as tf
+
+# Download required NLTK data
+nltk.download('punkt')
+nltk.download('wordnet')
+
+# Load and preprocess the dataset
+data_path = '/content/medquad.csv'
+data = pd.read_csv(data_path)
+
+# Initialize lists for storing training data
+patterns = []
+tags = []
+responses_dict = {}
+
+# Preprocess data
+for index, row in data.iterrows():
+    question = row['question']
+    answer = row['answer']
+    tag = row['source']
+    
+    patterns.append(question)
+    tags.append(tag)
+    if tag in responses_dict:
+        responses_dict[tag].append(answer)
+    else:
+        responses_dict[tag] = [answer]
+
+# Tokenize and lemmatize the patterns
+lemmatizer = nltk.WordNetLemmatizer()
+words = []
+documents = []
+
+for pattern, tag in zip(patterns, tags):
+    word_list = nltk.word_tokenize(pattern)
+    words.extend(word_list)
+    documents.append((word_list, tag))
+
+words = [lemmatizer.lemmatize(w.lower()) for w in words if w not in ['?', '!', '.', ',']]
+words = sorted(list(set(words)))
+
+# Encode tags
+label_encoder = LabelEncoder()
+tags_encoded = label_encoder.fit_transform(tags)
+tags_encoded = np.array(tags_encoded)
+
+# Prepare training data
+training = []
+output_empty = [0] * len(set(tags_encoded))
+
+for doc in documents:
+    bag = []
+    pattern_words = doc[0]
+    pattern_words = [lemmatizer.lemmatize(word.lower()) for word in pattern_words]
+    for w in words:
+        bag.append(1) if w in pattern_words else bag.append(0)
+    training.append(bag)
+
+training = np.array(training)
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(training, tags_encoded, test_size=0.2, random_state=42)
+
+# Build the model
+model = Sequential()
+model.add(Dense(128, input_shape=(len(X_train[0]),), activation='relu'))
+model.add(Dropout(0.5))
+model.add(Dense(64, activation='relu'))
+model.add(Dropout(0.5))
+model.add(Dense(len(set(tags_encoded)), activation='softmax'))
+
+# Compile the model
+sgd = tf.keras.optimizers.legacy.SGD(learning_rate=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+model.compile(loss='sparse_categorical_crossentropy', optimizer=sgd, metrics=['accuracy'])
+
+# Train the model
+hist = model.fit(X_train, y_train, epochs=200, batch_size=5, verbose=1)
+
+# Evaluate the model
+y_pred = model.predict(X_test)
+y_pred = np.argmax(y_pred, axis=1)
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy: {accuracy * 100:.2f}%")
+
+# Function to classify a new pattern
+def classify_pattern(pattern):
+    bow = [0] * len(words)
+    pattern_words = nltk.word_tokenize(pattern)
+    pattern_words = [lemmatizer.lemmatize(word.lower()) for word in pattern_words]
+    for s in pattern_words:
+        for i, w in enumerate(words):
+            if w == s:
+                bow[i] = 1
+    bow = np.array(bow)
+    res = model.predict(np.array([bow]))[0]
+    return label_encoder.inverse_transform([np.argmax(res)])[0]
+
+# Chat function
+def chat():
+    print("Start talking with the bot (type 'quit' to stop)!")
+    while True:
+        inp = input("You: ")
+        if inp.lower() == "quit":
+            break
+        tag = classify_pattern(inp)
+        response = random.choice(responses_dict[tag])
+        print(f"ChatBot: {response}")
+
+# Start the chat
+chat()
